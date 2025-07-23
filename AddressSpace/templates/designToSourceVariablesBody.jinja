@@ -1,0 +1,475 @@
+{# © Copyright CERN, 2015.                                                       #}
+{# All rights not expressly granted are reserved.                                #}
+{# This file is part of Quasar.                                                  #}
+{#                                                                               #}
+{# Quasar is free software: you can redistribute it and/or modify                #}
+{# it under the terms of the GNU Lesser General Public Licence as published by   #}
+{# the Free Software Foundation, either version 3 of the Licence.                #}
+{# Quasar is distributed in the hope that it will be useful,                     #}
+{# but WITHOUT ANY WARRANTY; without even the implied warranty of                #}
+{#                                                                               #}
+{# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the                 #}
+{# GNU Lesser General Public Licence for more details.                           #}
+{#                                                                               #}
+{# You should have received a copy of the GNU Lesser General Public License      #}
+{# along with Quasar.  If not, see <http://www.gnu.org/licenses/>                #}
+{#                                                                               #}
+{# Created:   Jul 2014 (the original XSLT version)                               #}
+{#            10 Aug 2020 (translated to Jinja2)                                 #}
+{# Authors:                                                                      #}
+{#   Piotr Nikiel <piotr@nikiel.info>                                            #}
+
+{% import 'headers.jinja' as headers %}
+{{ headers.cppFullGeneratedHeader() }}
+
+#include <SourceVariables.h>
+#include <LogIt.h>
+#include <Utils.h>
+using namespace std;
+
+{% for className in designInspector.get_names_of_all_classes(only_with_device_logic=True) %}
+  #include <D{{className}}.h>
+{% endfor %}
+
+namespace AddressSpace
+{
+
+/* The thread pool should be initialized by Meta while reading the config file, using function: 
+    SourceVariables_initSourceVariablesThreadPool */
+static Quasar::ThreadPool *sourceVariableThreads = nullptr;
+void SourceVariables_initSourceVariablesThreadPool (unsigned int minThreads, unsigned int maxThreads, unsigned int maxJobs)
+{
+  LOG(Log::DBG) << "Initializing source variables thread pool to min=" << minThreads  << " max=" << maxThreads << " threads maxJobs=" << " jobs";
+  sourceVariableThreads = new Quasar::ThreadPool (maxThreads, maxJobs);
+}
+
+void SourceVariables_destroySourceVariablesThreadPool ()
+{
+  if (sourceVariableThreads)
+  {
+    delete sourceVariableThreads;
+    sourceVariableThreads = nullptr;
+  }
+}
+
+Quasar::ThreadPool* SourceVariables_getThreadPool () { return sourceVariableThreads; }
+}
+
+#ifndef BACKEND_OPEN62541
+
+
+#include <iomanager.h>
+
+#include <iostream>
+#include <stdexcept>
+
+#include <QuasarThreadPool.h>
+  
+{% for className in designInspector.get_names_of_all_classes() %}
+  {% if designInspector.objectify_source_variables(className)|length > 0 %}
+    #include <AS{{className}}.h>
+    {% if designInspector.class_has_device_logic(className) %}
+      #include <D{{className}}.h>
+    {% endif %}
+  {% endif %}
+{% endfor %}
+
+namespace AddressSpace
+{
+
+{% for className in designInspector.get_names_of_all_classes(only_with_device_logic=True) %}
+  {% for sv in designInspector.objectify_source_variables(className, restrict_by="[@addressSpaceRead='asynchronous' or @addressSpaceRead='synchronous']") %}
+    class IoJob_{{className}}_READ_{{sv.get('name')}} : public Quasar::ThreadPoolJob
+    {
+      public:
+        IoJob_{{className}}_READ_{{sv.get('name')}} (
+          IOManagerCallback *callback,
+          OpcUa_UInt32 hTransaction,
+          OpcUa_UInt32 callbackHandle,
+          const UaNode* parentObjectNode
+        ):
+          m_callback(callback),
+          m_hTransaction(hTransaction),
+          m_callbackHandle (callbackHandle),
+          m_parentObjectNode (parentObjectNode),
+          m_addressSpaceObject (dynamic_cast<const AS{{className}}*> ( m_parentObjectNode )),
+          m_deviceLink(nullptr),
+          m_mutex(nullptr)
+        {
+          // Obtain Device Logic object
+          if (m_addressSpaceObject != m_parentObjectNode)
+            throw_runtime_error_with_origin("Invalid cast?");
+          m_deviceLink = m_addressSpaceObject->getDeviceLink();
+          if (!m_deviceLink)
+            throw_runtime_error_with_origin("No device link?");
+          {% if sv.get('addressSpaceReadUseMutex') == 'of_this_operation' %}
+            m_mutex = &m_deviceLink->getLockVariableRead_{{sv.get('name')}} ();
+          {% elif sv.get('addressSpaceReadUseMutex') == 'of_this_variable' %}
+            m_mutex = &m_deviceLink->getLockVariable_{{sv.get('name')}} ();
+          {% elif sv.get('addressSpaceReadUseMutex') == 'of_containing_object' %}
+            m_mutex = &m_deviceLink->getLock();
+          {% elif sv.get('addressSpaceReadUseMutex') == 'of_parent_of_containing_object' %}  
+            m_mutex = &m_deviceLink->getParent()->getLock();
+          {% elif sv.get('addressSpaceReadUseMutex') == 'handpicked' %}
+            m_mutex = m_addressSpaceObject->fetchReadMutexOf{{sv.get('name')|capFirst}} ();
+            if (!m_mutex)
+            {
+              throw_runtime_error_with_origin("Handpicked (per Design) mutex was not finally picked (!!) "
+                "RISK OF RACE CONDITION, fix your code. Aborting transaction. "
+                "(class={{className}} SV={{sv.get('name')}}, read mutex)");
+            }
+          {% elif sv.get('addressSpaceReadUseMutex') == 'no' %}
+            /* Nothing to do, m_mutex is default initialized to nullptr anyway */
+          {% else %}
+            {{ abort('invalid mode addressSpaceReadUseMutex: ' + sv.get('addressSpaceReadUseMutex')) }}
+          {% endif %}
+          
+        }
+        
+      virtual void execute ()
+      {
+        LOG(Log::DBG) << 
+          "Executing IoJob read: className={{className}} varName={{sv.get('name')}} " <<
+          " hTransaction:" << m_hTransaction << 
+          " cbkhandle " << m_callbackHandle;
+        UaStatus s;
+        {{sv.get('dataType')}} value;
+        UaDateTime sourceTime;
+        
+        try
+        {
+          s = m_deviceLink->read{{sv.get('name')|capFirst}} (value, sourceTime );
+        }
+        catch (const std::exception& ex)
+        {
+          LOG(Log::ERR) << "At variable " << m_addressSpaceObject->nodeId().toString().toUtf8() << " An exception was thrown from readValue: " << ex.what();
+          s = OpcUa_BadInternalError;
+        }
+        catch (...)
+        {
+          LOG(Log::ERR) << "At variable " << m_addressSpaceObject->nodeId().toString().toUtf8() << " A non-standard exception was thrown from read{{sv.get('name')|capFirst}}";
+          s = OpcUa_BadInternalError;
+        }
+
+        UaDataValue result (UaVariant(value), s.statusCode(), sourceTime, UaDateTime::now());
+        // get appropriate object
+        s = m_callback->finishRead (
+          m_hTransaction,
+          m_callbackHandle,
+          result
+        );
+        LOG(Log::DBG) << "After finishRead status:" << s.toString().toUtf8();
+      }
+
+      virtual std::string describe() const
+      {
+        return std::string("read sourcevariable {{sv.get('name')}} of object ") + m_parentObjectNode->nodeId().toString().toUtf8();
+      }
+
+      virtual std::mutex* associatedMutex() const
+      {
+        return m_mutex;
+      }
+
+      private:
+        IOManagerCallback* m_callback;
+        OpcUa_UInt32       m_hTransaction;
+        OpcUa_UInt32       m_callbackHandle;
+        const UaNode*      m_parentObjectNode;
+        const AS{{className}}*   m_addressSpaceObject;
+        Device::D{{className}}* m_deviceLink;
+        std::mutex*        m_mutex;
+
+    };
+  {% endfor %}
+  
+  {% for sv in designInspector.objectify_source_variables(className, restrict_by="[@addressSpaceWrite='asynchronous' or @addressSpaceWrite='synchronous']") %}
+    class IoJob_{{className}}_WRITE_{{sv.get('name')}} : public Quasar::ThreadPoolJob
+    {
+      public:
+        IoJob_{{className}}_WRITE_{{sv.get('name')}} (
+          IOManagerCallback* callback,
+          OpcUa_UInt32       hTransaction,
+          OpcUa_UInt32       callbackHandle,
+          const UaNode*      parentObjectNode,
+          OpcUa_WriteValue*  writeValue
+        ):
+          m_callback(callback),
+          m_hTransaction(hTransaction),
+          m_callbackHandle (callbackHandle),
+          m_parentObjectNode (parentObjectNode),
+          m_variant (writeValue->Value.Value),
+          m_addressSpaceObject (dynamic_cast<const AS{{className}}*> ( m_parentObjectNode )),
+          m_deviceLink (nullptr),
+          m_mutex(nullptr)    
+        {
+          // Obtain Device Logic object
+          if (m_addressSpaceObject != m_parentObjectNode)
+            throw_runtime_error_with_origin("Cant map to device logic object -- something fishy with source-variables synchro?");
+          m_deviceLink = m_addressSpaceObject->getDeviceLink();
+          if (!m_deviceLink)
+            throw_runtime_error_with_origin("No device link?");
+          {% if sv.get('addressSpaceWriteUseMutex') == 'of_this_operation' %}
+            m_mutex = &m_deviceLink->getLockVariableWrite_{{sv.get('name')}} ();
+          {% elif sv.get('addressSpaceWriteUseMutex') == 'of_this_variable' %}
+            m_mutex = &m_deviceLink->getLockVariable_{{sv.get('name')}} ();
+          {% elif sv.get('addressSpaceWriteUseMutex') == 'of_containing_object' %}
+            m_mutex = &m_deviceLink->getLock();
+          {% elif sv.get('addressSpaceWriteUseMutex') == 'of_parent_of_containing_object' %}
+            m_mutex = &m_deviceLink->getParent()->getLock();
+          {% elif sv.get('addressSpaceWriteUseMutex') == 'handpicked' %}
+            m_mutex = m_addressSpaceObject->fetchWriteMutexOf{{sv.get('name')|capFirst}} ();
+            if (!m_mutex)
+            {
+              throw_runtime_error_with_origin("Handpicked (per Design) mutex was not finally picked (!!) RISK OF RACE CONDITION, fix your code. Aborting transaction. (class={{className}} SV={{sv.get('name')}}), write mutex");
+            }
+          {% elif sv.get('addressSpaceWriteUseMutex') == 'no' %}
+            /* Nothing to do, m_mutex is default initialized to nullptr anyway */
+          {% else %}
+            {{ abort('Invalid mode addressSpaceWriteUseMutex: ' + sv.get('addressSpaceWriteUseMutex')) }}
+          {% endif %}
+        }
+        
+        virtual void execute ()
+        {
+          LOG(Log::DBG) << "Executing IoJob write: className={{className}} varName={{sv.get('name')}} " <<
+            "hTransaction:" << m_hTransaction <<
+            " cbkhandle " << m_callbackHandle;
+          UaStatus s;
+        
+          {{sv.get('dataType')}} value;
+          
+          {% if sv.get('dataType') == 'UaVariant' %}
+            value = m_variant;
+            if (true)
+            {
+          {% else %}
+            if (m_variant.type() == {{oracle.data_type_to_builtin_type(sv.get('dataType'))}})
+            {
+              {% if sv.get('dataType') == 'UaString' %}
+                value = m_variant.toString();
+              {% else %}
+                //TODO @pnikiel: deserve to check the return value of the following call:
+                m_variant.{{oracle.data_type_to_variant_converter(sv.get('dataType'))}} (value);
+              {% endif %}
+          {% endif %}
+              try
+              {
+                s = m_deviceLink->write{{sv.get('name')|capFirst}} (value );
+              }
+              catch (const std::exception& ex)
+              {
+                /* TODO -- how to signalize error from here */
+                LOG(Log::ERR) << "At variable " << m_addressSpaceObject->nodeId().toString().toUtf8() << " An exception was thrown from write{{sv.get('name')|capFirst}}: " << ex.what();
+                s = OpcUa_BadInternalError;
+              }
+              catch (...)
+              {
+                /* TODO -- how to signalize error from here */
+                LOG(Log::ERR) << "At variable " << m_addressSpaceObject->nodeId().toString().toUtf8() << " A non-standard exception was thrown from write{{sv.get('name')|capFirst}}";
+                s = OpcUa_BadInternalError;
+              }
+            }
+            else
+              s = OpcUa_BadDataEncodingInvalid; // conversion from variant impossible.
+          UaDataValue result (UaVariant(value), s.statusCode(), UaDateTime::now(), UaDateTime::now());
+          // get appropriate object
+          s = m_callback->finishWrite (
+            m_hTransaction,
+            m_callbackHandle,
+            s
+          );
+          LOG(Log::TRC) << "After finishWrite status:" << s.toString().toUtf8();
+        }
+        
+        virtual std::string describe() const
+        {
+          return std::string("write sourcevariable {{sv.get('name')}} of object ") + m_parentObjectNode->nodeId().toString().toUtf8();
+        }
+
+        virtual std::mutex* associatedMutex() const
+        {
+          return m_mutex;
+        }
+        
+        
+      private:
+        IOManagerCallback* m_callback;
+        OpcUa_UInt32       m_hTransaction;
+        OpcUa_UInt32       m_callbackHandle;
+        const UaNode*      m_parentObjectNode;
+        UaVariant          m_variant;
+        const AS{{className}}*   m_addressSpaceObject;
+        Device::D{{className}}* m_deviceLink; 
+        std::mutex*        m_mutex;
+    };
+  {% endfor %}
+  
+{% endfor %}
+
+UaStatus SourceVariables_spawnIoJobRead (		
+  ASSourceVariableJobId jobId,
+  IOManagerCallback *callback,
+  OpcUa_UInt32 hTransaction,
+  OpcUa_UInt32        callbackHandle,
+  const UaNode *parentNode
+)
+{
+  if (! sourceVariableThreads)
+  {
+    LOG(Log::ERR) << "Refusing source variable operation, because source variable threads are not up. ";
+    return OpcUa_BadOutOfService;
+  }
+  try
+  {
+    switch (jobId)
+    {
+      {% for className in designInspector.get_names_of_all_classes() %}
+        {% set class = designInspector.objectify_class(className) %}
+        {% for sv in class.sourcevariable %}
+          {% if sv.get('addressSpaceRead') != 'forbidden' %}
+          case ASSOURCEVARIABLE_{{className}}_READ_{{sv.get('name')}}:
+            {% if not designInspector.class_has_device_logic(className) %}
+              return OpcUa_BadNotImplemented; // because this class has no device logic
+            {% else %}
+              {% if sv.get('addressSpaceRead') == 'asynchronous' or sv.get('addressSpaceRead') == 'synchronous' %}
+                {
+                  {% if sv.get('addressSpaceRead') == 'asynchronous' %}
+                    std::unique_ptr<IoJob_{{className}}_READ_{{sv.get('name')}}> job (
+                      new IoJob_{{className}}_READ_{{sv.get('name')}} (
+                        callback,
+                        hTransaction,
+                        callbackHandle,
+                        parentNode
+                        )); 
+                    UaStatus s = sourceVariableThreads->addJob (std::move(job));
+                    if (!s.isGood())
+                    {
+                      LOG(Log::ERR) << "While addJob(): " << s.toString().toUtf8();
+                    }
+                    return s;
+                  {% elif sv.get('addressSpaceRead') == 'synchronous' %}
+                    IoJob_{{className}}_READ_{{sv.get('name')}} job (
+                      callback,
+                      hTransaction,
+                      callbackHandle,
+                      parentNode
+                      );
+                    {
+                      {% if sv.get('addressSpaceReadUseMutex') != 'no' %}
+                        std::unique_lock<std::mutex> lock (*job.associatedMutex()); 
+                      {% endif %}
+                      job.execute();
+                    }
+                  {% else %}
+                    {{debug("Source-variable mode is unsupported and the generated code will probably be faulty. Mode was: ", sv.get('addressSpaceRead'))}}
+                  {% endif %}
+                }
+                return OpcUa_Good;
+              {% endif %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+      default:
+        return OpcUa_Bad;
+    }
+  }
+  catch (const std::exception& e)
+  {
+    LOG(Log::ERR) << "Exception: " << e.what() << " for creation of a thread pool job";
+    return OpcUa_BadInternalError;  
+  }
+  catch (...)
+  {
+    LOG(Log::ERR) << "Exception (generic clause) for creation of a thread pool job";
+    return OpcUa_BadInternalError;
+  }
+
+}
+
+UaStatus SourceVariables_spawnIoJobWrite (		
+  ASSourceVariableJobId jobId,
+  IOManagerCallback *callback,
+  OpcUa_UInt32 hTransaction,
+  OpcUa_UInt32        callbackHandle,
+  const UaNode *parentNode,
+  OpcUa_WriteValue*   pWriteValue
+)
+{
+  if (! sourceVariableThreads)
+  {
+    LOG(Log::ERR) << "Refusing source variable operation, because source variable threads are not up. ";
+    return OpcUa_BadOutOfService;
+  }
+  try
+  {
+    switch (jobId)
+    {
+      {% for className in designInspector.get_names_of_all_classes() %}
+        {% set class = designInspector.objectify_class(className) %}
+        {% for sv in class.sourcevariable %}
+          {% if sv.get('addressSpaceWrite') != 'forbidden' %}
+            case ASSOURCEVARIABLE_{{className}}_WRITE_{{sv.get('name')}}:
+              {% if not designInspector.class_has_device_logic(className) %}
+                return OpcUa_BadNotImplemented; // because this class has no device logic
+              {% else %}
+                {% if sv.get('addressSpaceWrite') == 'asynchronous' or sv.get('addressSpaceWrite') == 'synchronous' %}
+                  {
+                    {% if sv.get('addressSpaceWrite') == 'asynchronous' %}
+                      std::unique_ptr<IoJob_{{className}}_WRITE_{{sv.get('name')}}> job (
+                        new IoJob_{{className}}_WRITE_{{sv.get('name')}} (
+                          callback,
+                          hTransaction,
+                          callbackHandle,
+                          parentNode,
+                          pWriteValue
+                        )); 
+                      UaStatus s = sourceVariableThreads->addJob (std::move(job));
+                      if (!s.isGood())
+                      {
+                        LOG(Log::ERR) << "While addJob(): " << s.toString().toUtf8();
+                      }
+                      return s;
+                    {% elif sv.get('addressSpaceWrite') == 'synchronous' %}
+                      IoJob_{{className}}_WRITE_{{sv.get('name')}} job (
+                        callback,
+                        hTransaction,
+                        callbackHandle,
+                        parentNode,
+                        pWriteValue
+                      );
+                      { 
+                        {% if sv.get('addressSpaceWriteUseMutex') != 'no '%}
+                          std::unique_lock<std::mutex> lock (*job.associatedMutex()); 
+                        {% endif %}
+                        job.execute();
+                      }
+                    {% else %}
+                      {{debug("Source-variable mode is unsupported and the generated code will probably be faulty. Mode was: ", sv.get('addressSpaceWrite'))}}
+                    {% endif %}
+                  }  
+                {% endif %}
+              {% endif %}
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+      default:
+        return OpcUa_Bad;
+    }
+  }
+  catch (const std::exception& e)
+  {
+    LOG(Log::ERR) << "Exception: " << e.what() << " for creation of a thread pool job";
+    return OpcUa_BadInternalError;  
+  }
+  catch (...)
+  {
+    LOG(Log::ERR) << "Exception (generic clause) for creation of a thread pool job";
+    return OpcUa_BadInternalError;
+  }
+}
+
+}
+
+#endif // BACKEND_OPEN62541
