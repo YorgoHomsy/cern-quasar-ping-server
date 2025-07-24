@@ -60,7 +60,7 @@ public:
     void update();
 
 private:
-
+    std::string m_url;
 
 
 };

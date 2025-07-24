@@ -22,6 +22,7 @@
 
 #include <DService.h>
 #include <ASService.h>
+#include <cstdlib>
 
 namespace Device
 {
@@ -56,6 +57,9 @@ DService::DService (
     /* fill up constructor initialization list here */
 {
     /* fill up constructor body here */
+	m_url = config.url();
+	LOG(Log::INF) << "Trying to ping: " << m_url;
+
 }
 
 /* sample dtr */
@@ -75,6 +79,11 @@ DService::~DService ()
 // 3     You can do whatever you want, but please be decent.               3
 // 3333333333333333333333333333333333333333333333333333333333333333333333333
 void DService::update(){
-    LOG(Log::INF) << "test";
+	int16_t time;
+	std::string cmd = "ping " + m_url;
+	int16_t result = system(cmd.c_str());
+	getAddressSpaceLink()->setPing_time(time, OpcUa_Good);
+	LOG(Log::INF) << "ping: " << result;
+
 }
 }
