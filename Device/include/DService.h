@@ -60,7 +60,8 @@ public:
     void update();
 
 private:
-    std::string m_url;
+    std::string cmd;
+
 
 
 };

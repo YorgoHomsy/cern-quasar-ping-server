@@ -57,9 +57,9 @@ DService::DService (
     /* fill up constructor initialization list here */
 {
     /* fill up constructor body here */
-	m_url = config.url();
+	std::string m_url = config.url();
 	LOG(Log::INF) << "Trying to ping: " << m_url;
-
+	cmd = "ping " + m_url;
 }
 
 /* sample dtr */
@@ -79,9 +79,9 @@ DService::~DService ()
 // 3     You can do whatever you want, but please be decent.               3
 // 3333333333333333333333333333333333333333333333333333333333333333333333333
 void DService::update(){
-	std::string cmd = "ping " + m_url;
-	int16_t result = system(cmd.c_str());
-	getAddressSpaceLink()->setPing_time(result, OpcUa_Good);
+
+	int result = system(cmd.c_str());
+	getAddressSpaceLink()->setPing_time(static_cast<OpcUa_Int16>(result), OpcUa_Good);
 	LOG(Log::INF) << "ping: " << result;
 
 }
