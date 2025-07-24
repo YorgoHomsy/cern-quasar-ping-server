@@ -79,77 +79,74 @@ DService::~DService ()
 // 3     You can do whatever you want, but please be decent.               3
 // 3333333333333333333333333333333333333333333333333333333333333333333333333
 void DService::update(){
-    // Build the ping command to send 1 packet to the host URL
-    // "-c 1" sends one ping
-    // "2>&1" ensures both stdout and stderr go to the same pipe
+    LOG(Log::DBG) << "Running update()...";
+
+    // Check if host_url is valid
+    if (host_url.empty()) {
+        LOG(Log::ERR) << "Host URL is empty!";
+        getAddressSpaceLink()->setPing_time(-1, OpcUa_BadInvalidArgument);
+        getAddressSpaceLink()->setPing_state(false, OpcUa_BadInvalidArgument);
+        return;
+    }
+
+    // Build the ping command to send 1 packet
     std::string cmd = "ping -c 1 " + host_url + " 2>&1";
 
-    // Buffer used to read the ping output line-by-line
+    // Buffer to read ping output
     std::array<char, 128> buffer;
-
-    // Will hold the full ping command output
     std::string result;
 
-    // Open a pipe to execute the ping command and read its output
+    // Open the pipe
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
-
-    // Check if the pipe was successfully created
     if (!pipe) {
         LOG(Log::ERR) << "popen failed!";
-        // Set ping_time to -1 to indicate internal error
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadInternalError);
         getAddressSpaceLink()->setPing_state(false, OpcUa_BadDataUnavailable);
         return;
     }
 
-    // Read all lines of output from the ping command
+    // Read ping output
     while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
-        result += buffer.data();  // Append line to result
+        result += buffer.data();
     }
 
-    // Find the position of "time=" in the output
+    // Log the raw ping output for debugging
+    LOG(Log::DBG) << "Raw ping output: " << result;
+
+    // Look for "time=" in the output
     auto pos = result.find("time=");
     if (pos == std::string::npos) {
-        // Couldn't find ping time
-        LOG(Log::ERR) << "time= not found in ping output";
+        LOG(Log::ERR) << "\"time=\" not found in ping output.";
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
         getAddressSpaceLink()->setPing_state(false, OpcUa_Good);
         return;
     }
 
-    // The actual number starts 5 characters after "time="
+    // Extract ping time value
     auto ms_start = pos + 5;
-
-    // Find the " ms" that comes after the number
     auto ms_end = result.find(" ms", ms_start);
     if (ms_end == std::string::npos) {
-        // Couldn't find end of time value
-        LOG(Log::ERR) << "' ms' not found in ping output";
+        LOG(Log::ERR) << "\" ms\" not found after time= in ping output.";
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
         getAddressSpaceLink()->setPing_state(false, OpcUa_Good);
         return;
     }
 
-    // Extract the ping time substring (e.g. "7.07")
     std::string time_str = result.substr(ms_start, ms_end - ms_start);
 
     try {
-        // Convert the string to a double (e.g. 7.07 ms)
         double ping_time_ms = std::stod(time_str);
 
-        // Set the ping_time in the OPC UA address space
+        // Send to address space
         getAddressSpaceLink()->setPing_time(static_cast<OpcUa_Double>(ping_time_ms), OpcUa_Good);
         getAddressSpaceLink()->setPing_state(true, OpcUa_Good);
-        // Log the result
-        LOG(Log::INF) << "Ping time: " << ping_time_ms << " ms";
 
-
+        LOG(Log::INF) << "Ping successful: " << ping_time_ms << " ms";
     } catch (...) {
-        // Conversion failed (e.g. invalid format)
-        LOG(Log::ERR) << "Failed to convert ping time string to double";
+        LOG(Log::ERR) << "Failed to convert ping time string: " << time_str;
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
         getAddressSpaceLink()->setPing_state(false, OpcUa_Good);
     }
-
 }
+
 }
