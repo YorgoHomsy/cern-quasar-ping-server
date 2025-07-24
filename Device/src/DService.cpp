@@ -79,10 +79,9 @@ DService::~DService ()
 // 3     You can do whatever you want, but please be decent.               3
 // 3333333333333333333333333333333333333333333333333333333333333333333333333
 void DService::update(){
-	int16_t time;
 	std::string cmd = "ping " + m_url;
 	int16_t result = system(cmd.c_str());
-	getAddressSpaceLink()->setPing_time(time, OpcUa_Good);
+	getAddressSpaceLink()->setPing_time(result, OpcUa_Good);
 	LOG(Log::INF) << "ping: " << result;
 
 }
