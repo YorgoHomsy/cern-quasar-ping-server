@@ -98,6 +98,7 @@ void DService::update(){
         LOG(Log::ERR) << "popen failed!";
         // Set ping_time to -1 to indicate internal error
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadInternalError);
+        getAddressSpaceLink()->setPing_state(false, OpcUa_BadDataUnavailable);
         return;
     }
 
@@ -112,6 +113,7 @@ void DService::update(){
         // Couldn't find ping time
         LOG(Log::ERR) << "time= not found in ping output";
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
+        getAddressSpaceLink()->setPing_state(false, OpcUa_Good);
         return;
     }
 
@@ -124,6 +126,7 @@ void DService::update(){
         // Couldn't find end of time value
         LOG(Log::ERR) << "' ms' not found in ping output";
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
+        getAddressSpaceLink()->setPing_state(false, OpcUa_Good);
         return;
     }
 
@@ -136,14 +139,16 @@ void DService::update(){
 
         // Set the ping_time in the OPC UA address space
         getAddressSpaceLink()->setPing_time(static_cast<OpcUa_Double>(ping_time_ms), OpcUa_Good);
-
+        getAddressSpaceLink()->setPing_state(true, OpcUa_Good);
         // Log the result
         LOG(Log::INF) << "Ping time: " << ping_time_ms << " ms";
+
 
     } catch (...) {
         // Conversion failed (e.g. invalid format)
         LOG(Log::ERR) << "Failed to convert ping time string to double";
         getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
+        getAddressSpaceLink()->setPing_state(false, OpcUa_Good);
     }
 
 }
