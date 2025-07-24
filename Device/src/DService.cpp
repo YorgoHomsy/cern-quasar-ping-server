@@ -57,9 +57,9 @@ DService::DService (
     /* fill up constructor initialization list here */
 {
     /* fill up constructor body here */
-	std::string m_url = config.url();
-	LOG(Log::INF) << "Trying to ping: " << m_url;
-	cmd = "ping " + m_url;
+	host_url = config.url();
+	LOG(Log::INF) << "Trying to ping: " << host_url;
+
 }
 
 /* sample dtr */
@@ -79,10 +79,72 @@ DService::~DService ()
 // 3     You can do whatever you want, but please be decent.               3
 // 3333333333333333333333333333333333333333333333333333333333333333333333333
 void DService::update(){
+    // Build the ping command to send 1 packet to the host URL
+    // "-c 1" sends one ping
+    // "2>&1" ensures both stdout and stderr go to the same pipe
+    std::string cmd = "ping -c 1 " + host_url + " 2>&1";
 
-	int result = system(cmd.c_str());
-	getAddressSpaceLink()->setPing_time(static_cast<OpcUa_Int16>(result), OpcUa_Good);
-	LOG(Log::INF) << "ping: " << result;
+    // Buffer used to read the ping output line-by-line
+    std::array<char, 128> buffer;
+
+    // Will hold the full ping command output
+    std::string result;
+
+    // Open a pipe to execute the ping command and read its output
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+
+    // Check if the pipe was successfully created
+    if (!pipe) {
+        LOG(Log::ERR) << "popen failed!";
+        // Set ping_time to -1 to indicate internal error
+        getAddressSpaceLink()->setPing_time(-1, OpcUa_BadInternalError);
+        return;
+    }
+
+    // Read all lines of output from the ping command
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+        result += buffer.data();  // Append line to result
+    }
+
+    // Find the position of "time=" in the output
+    auto pos = result.find("time=");
+    if (pos == std::string::npos) {
+        // Couldn't find ping time
+        LOG(Log::ERR) << "time= not found in ping output";
+        getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
+        return;
+    }
+
+    // The actual number starts 5 characters after "time="
+    auto ms_start = pos + 5;
+
+    // Find the " ms" that comes after the number
+    auto ms_end = result.find(" ms", ms_start);
+    if (ms_end == std::string::npos) {
+        // Couldn't find end of time value
+        LOG(Log::ERR) << "' ms' not found in ping output";
+        getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
+        return;
+    }
+
+    // Extract the ping time substring (e.g. "7.07")
+    std::string time_str = result.substr(ms_start, ms_end - ms_start);
+
+    try {
+        // Convert the string to a double (e.g. 7.07 ms)
+        double ping_time_ms = std::stod(time_str);
+
+        // Set the ping_time in the OPC UA address space
+        getAddressSpaceLink()->setPing_time(static_cast<OpcUa_Double>(ping_time_ms), OpcUa_Good);
+
+        // Log the result
+        LOG(Log::INF) << "Ping time: " << ping_time_ms << " ms";
+
+    } catch (...) {
+        // Conversion failed (e.g. invalid format)
+        LOG(Log::ERR) << "Failed to convert ping time string to double";
+        getAddressSpaceLink()->setPing_time(-1, OpcUa_BadDataUnavailable);
+    }
 
 }
 }

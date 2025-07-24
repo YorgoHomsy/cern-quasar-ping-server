@@ -60,7 +60,7 @@ public:
     void update();
 
 private:
-    std::string cmd;
+    std::string host_url;
 
 
 
