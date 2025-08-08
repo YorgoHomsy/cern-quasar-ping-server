@@ -13,6 +13,10 @@
   		dataType="OpcUa_Double" name="ping_time" nullPolicy="nullAllowed"
   		addressSpaceWrite="forbidden" initialStatus="OpcUa_BadWaitingForInitialData">
   	</d:cachevariable>
+  	<d:cachevariable initializeWith="configuration"
+  		dataType="UaString" name="serviceURL" nullPolicy="nullAllowed"
+  		addressSpaceWrite="forbidden">
+  	</d:cachevariable>
   </d:class>
   <d:root>
   	<d:hasobjects instantiateUsing="configuration" class="Service"></d:hasobjects></d:root>
