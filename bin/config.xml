@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration xmlns="http://cern.ch/quasar/Configuration" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://cern.ch/quasar/Configuration ../Configuration/Configuration.xsd ">
 
-	<Service name="u1" url="google.com"></Service>
-	<Service name="u2" url="cern.ch"></Service></configuration>
+	<Service name="u1" url="google.com" serviceURL="google.com"></Service>
+	<Service name="u2" url="cern.ch" serviceURL="cern.ch"></Service>
+	<Service name="u3" url="firefox.com" serviceURL="firefox.com"></Service></configuration>
