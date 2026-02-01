@@ -108,10 +108,10 @@ A critical validation of the C++ logic was observing the latency delta between e
 | **Target: google.com** | **Target: cern.ch** |
 | :---: | :---: |
 | ![Google Implementation Status](assets/google_implementation.jpg) | ![CERN Implementation Status](assets/cern_implementation.jpg) |
-| **Ping: ~6.57 ms** | **Ping: ~0.628 ms** |
+| **Ping: ~6.57 s** | **Ping: ~0.628 s** |
 
 > [!TIP]
-> **Observation:** The significantly lower latency for `cern.ch` ($<1$ ms) is a logical result of running the server locally within CERN's high-speed network infrastructure. This confirms the accuracy of the C++ data collection engine and the high-fidelity synchronization with the WinCC OA HMI.
+> **Observation:** The significantly lower latency for `cern.ch` ($<1$ s) is a logical result of running the server locally within CERN's high-speed network infrastructure. This confirms the accuracy of the C++ data collection engine and the high-fidelity synchronization with the WinCC OA HMI.
 
 ---
 
