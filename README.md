@@ -1,93 +1,153 @@
-# pingProject
+# CERN Quasar OPC UA Service Ping Monitoring Project
 
+This is my main flagship project during my CERN internship (Summer 2025), showcasing a real-time OPC UA service monitoring system integrated with a Human-Machine Interface (HMI) in WinCC OA.
 
+The project demonstrates my C++ expertise, understanding of OPC UA protocols, cache variable handling, and industrial-grade HMI design, while providing real-time insights into service latency and connectivity.
 
-## Getting started
+![System Flow](assets/overview.jpg)
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+---
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## 🎯 Project Objectives
+The goal was to build a high-performance bridge between low-level system diagnostics and industrial visualization.
 
-## Add your files
+* **Real-Time Monitoring:** Track health and latency for services like `google.com`, `cern.ch`, and `firefox.com`.
+* **Data Exposure:** Provide live metrics via the **OPC UA protocol** for industrial standard communication.
+* **HMI Integration:** Design an interactive **WinCC OA dashboard** for real-time operator navigation.
+* **Validation:** Verify data integrity using **UaExpert** and live SCADA feedback.
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+---
 
+## 🏗️ Class Hierarchy
+The server is built using the **Quasar framework** with a scalable parent-child architecture.
+
+### **DService (Parent Class)**
+* **Role:** Acts as the manager for all monitored network nodes.
+* **Logic:** Executes a custom `update()` loop that triggers system-level pings and pushes data to the OPC UA address space.
+
+### **Service Instances (Child Objects)**
+Each instance represents a specific monitored URL with the following **Cache Variables**:
+
+| Variable | Type | Access | Description |
+| :--- | :--- | :--- | :--- |
+| `ping_state` | Boolean | Read-only | Indicates if the host is reachable. |
+| `ping_time` | Double | Read-only | Captured round-trip latency in milliseconds. |
+| `serviceURL` | String | Read-only | The target address defined in the configuration. |
+
+![Class Structure](assets/google_implementation.png)
+
+---
+
+## Technical Implementation (C++)
+The core of the project is the DService class. I implemented a robust update() loop that interfaces with the Linux kernel to execute asynchronous ping requests and parse the raw data into the OPC UA address space.
+
+### Feature Highlight: The Ping Logic
+I utilized **popen** to open a pipe to the system shell, allowing the **C++ server** to capture and interpret network diagnostics in real-time.
+
+```cpp
+/* DService.cpp - Logic for Real-time Latency Capture */
+
+void Device::DService::update() {
+    // 1. Construct the system command
+    std::string cmd = "ping -c 1 " + host_url + " 2>&1";
+
+    // 2. Open pipe to shell and read output
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(cmd.c_str(), "r"), pclose);
+    
+    // ... Parsing Logic ...
+
+    // 3. Extract latency and update OPC UA Address Space
+    auto pos = result.find("time=");
+    if (pos != std::string::npos) {
+        auto ms_start = pos + 5;
+        auto ms_end = result.find(" ms", ms_start);
+        std::string time_str = result.substr(ms_start, ms_end - ms_start);
+
+        double ping_time_ms = std::stod(time_str);
+        
+        // Update the server's cache variables
+        getAddressSpaceLink()->setPing_time(static_cast<OpcUa_Double>(ping_time_ms), OpcUa_Good);
+        getAddressSpaceLink()->setPing_state(true, OpcUa_Good);
+    }
+}
 ```
-cd existing_repo
-git remote add origin https://gitlab.cern.ch/yhomsi/pingproject.git
-git branch -M master
-git push -uf origin master
-```
 
-## Integrate with your tools
+---
 
-- [ ] [Set up project integrations](https://gitlab.cern.ch/yhomsi/pingproject/-/settings/integrations)
 
-## Collaborate with your team
+## 🖥️ HMI Overview (WinCC OA)
+The HMI was designed to **CERN industrial standards (859 × 849 px)**, providing an interactive interface for real-time monitoring. The front-end communicates directly with the C++ OPC UA back-end to visualize network diagnostics.
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### **Panel Architecture**
 
-## Test and Deploy
+| **Service Panel** | **Main Dashboard** | **Child Detail Panel** |
+| :--- | :--- | :--- |
+| ![Service Panel](assets/service_panel.png) | ![Main Dashboard](assets/main_panel.png) | ![Child Detail Panel](assets/child_panel.png) |
+| **Displays:** Service name and dynamic status indicators. | **Role:** Central hub for gateway management. | **Role:** Granular diagnostic view for specific nodes. |
+| **Logic:** Color-coded (Grey/Green/Red) based on `ping_state`. | **Feature:** Custom **Next Service** navigation logic. | **Logic:** Direct link to `ping_state` and `ping_time` variables. |
 
-Use the built-in continuous integration in GitLab.
+---
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+### 🎨 Visual Feedback Logic
+To ensure immediate operator awareness, I implemented a traffic-light status system:
+* ⚪ **Grey (Unknown):** Initializing or service not yet checked.
+* 🟢 **Green (Connected):** Successful ICMP response received.
+* 🔴 **Red (Disconnected):** Service unreachable or timeout occurred.
 
-***
+> [!NOTE]
+> All fields in the **Child Detail Panel** are configured as read-only to maintain data integrity and serve as high-fidelity live indicators for the operator.
+---
 
-# Editing this README
+## ✅ Validation & Demonstration
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+### **Network Proximity Insight**
+A critical validation of the C++ logic was observing the latency delta between external and internal network services.
 
-## Suggestions for a good README
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
 
-## Name
-Choose a self-explaining name for your project.
+| **Target: google.com** | **Target: cern.ch** |
+| :---: | :---: |
+| ![Google Implementation Status](assets/google_implementation.jpg) | ![CERN Implementation Status](assets/cern_implementation.jpg) |
+| **Ping: ~6.57 ms** | **Ping: ~0.628 ms** |
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+> [!TIP]
+> **Observation:** The significantly lower latency for `cern.ch` ($<1$ ms) is a logical result of running the server locally within CERN's high-speed network infrastructure. This confirms the accuracy of the C++ data collection engine and the high-fidelity synchronization with the WinCC OA HMI.
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+---
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+### **Live Demo**
+This 10-second walkthrough demonstrates the end-to-end integration of the code and the interface:
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+1.  **Startup:** The system initializes with `google.com`, immediately reflecting a "Green" (Connected) status.
+2.  **Navigation:** Utilizing the **Next Service** button to cycle through active monitored nodes like `cern.ch`.
+3.  **Live Metrics:** Real-time updates of the status bar and latency values as the server pings `firefox.com`.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+![HMI Live Implementation Walkthrough](assets/ping_demo_full.gif)
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+---
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## 🛠️ Key Features & Skills
+* **Industrial Connectivity:** Built a real-time **OPC UA server** in C++ using the Quasar framework.
+* **Data Management:** Managed cache variables for connection states and high-precision latency tracking.
+* **SCADA Design:** Integrated industrial HMI using **WinCC OA** panels and custom CTRL scripts.
+* **User Experience:** Implemented interactive "Next Service" navigation for efficient dashboard operation.
+* **Network Intelligence:** Applied logical analysis of network latency and service availability.
+* **Quality Assurance:** Conducted real-time validation and stress-testing using **UaExpert**.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+---
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## ⚙️ Technologies Used
+* **C++ (Quasar Framework):** Core server logic, object-oriented hierarchy, and cache variable management.
+* **WinCC OA:** Custom HMI panels, dashboards, and event-driven scripting.
+* **UaExpert:** Industrial client used for protocol testing and variable subscription.
+* **Linux / WSL:** Primary development and build environment.
+* **Python:** Used for automation and scaffolding via Jinja2 templates.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+---
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## 🎓 Learning Outcomes
+* **Real-Time Systems:** Developed hands-on expertise in building monitoring applications for industrial environments.
+* **System Architecture:** Applied C++ object-oriented design patterns within a specialized industrial framework.
+* **HMI/UX Design:** Learned to design interactive dashboards that visualize complex real-time data for operators.
+* **Network Diagnostics:** Gained a deep understanding of network monitoring, ICMP protocols, and latency analysis.
+* **Project Lifecycle:** Successfully documented a complex project workflow end-to-end, from low-level code to high-level HMI.
