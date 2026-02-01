@@ -34,7 +34,7 @@ Each instance represents a specific monitored URL with the following **Cache Var
 | `ping_time` | Double | Read-only | Captured round-trip latency in milliseconds. |
 | `serviceURL` | String | Read-only | The target address defined in the configuration. |
 
-![Class Structure](assets/google_implementation.png)
+![Class Structure](assets/class_structure.png)
 
 ---
 
